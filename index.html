@@ -76,18 +76,35 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let cfg = {}, posts = [], tab = 'draft', current = null;
 
-function store(k, v) { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} }
-function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+const DEFAULT_API = 'https://script.google.com/macros/s/AKfycbwxiSopXrZHBD5oizJBvveLcU6JemqhvyxGr_6XTRdRkyafILkCx3xvDkEOG3pAyWr-/exec';
+// 저장: localStorage → 안 되면 쿠키 (사파리 개인정보 보호·앱 내 브라우저 대비)
+function store(k, v) {
+  try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {}
+  try {
+    document.cookie = v === undefined
+      ? `rr_${k}=; max-age=0; path=/; SameSite=Lax`
+      : `rr_${k}=${encodeURIComponent(v)}; max-age=31536000; path=/; SameSite=Lax; Secure`;
+  } catch (e) {}
+}
+function load(k) {
+  let v = null;
+  try { v = localStorage.getItem(k); } catch (e) {}
+  if (!v) {
+    const m = document.cookie.match(new RegExp('(?:^|; )rr_' + k + '=([^;]*)'));
+    if (m) v = decodeURIComponent(m[1]);
+  }
+  return v;
+}
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
 
 // 설정: 주소 뒤 #api=...&key=... 로 한 번 열면 저장됨
 function initCfg() {
   const h = new URLSearchParams(location.hash.slice(1));
-  if (h.get('api') && h.get('key')) {
-    store('api', h.get('api')); store('key', h.get('key'));
-    history.replaceState(null, '', location.pathname);
+  if (h.get('key')) {
+    cfg = { api: h.get('api') || DEFAULT_API, key: h.get('key') };
+    store('api', cfg.api); store('key', cfg.key);
   }
-  cfg = { api: load('api'), key: load('key') };
+  cfg = { api: cfg.api || load('api') || DEFAULT_API, key: cfg.key || load('key') };
 }
 
 async function api(params) {
@@ -131,13 +148,15 @@ function showSetup() {
   $('tabs').innerHTML = ''; $('bar').hidden = true; $('hBtn').hidden = true;
   $('main').innerHTML = `
     <h2>처음 설정</h2>
-    <p class="help">sjm에서 만든 '검수 페이지 링크'로 열면 자동으로 입력돼요. 직접 넣어도 돼요.</p>
-    <label>Apps Script 웹 앱 주소<input id="sApi" placeholder="https://script.google.com/macros/s/.../exec"></label>
+    <p class="help">접속 키만 입력하면 돼요. 주소는 이미 들어가 있어요.</p>
+    <label>Apps Script 웹 앱 주소<input id="sApi" value="${esc(cfg.api || DEFAULT_API)}"></label>
     <p></p><label>접속 키<input id="sKey"></label><p></p>
     <button class="primary" id="sSave">저장</button>`;
   $('sSave').onclick = () => {
-    store('api', $('sApi').value.trim()); store('key', $('sKey').value.trim());
-    initCfg(); refresh();
+    cfg = { api: $('sApi').value.trim() || DEFAULT_API, key: $('sKey').value.trim() };
+    if (!cfg.key) return toast('접속 키를 입력하세요');
+    store('api', cfg.api); store('key', cfg.key);
+    refresh();
   };
 }
 
@@ -148,7 +167,7 @@ async function refresh() {
     posts = (await api({ light: 1 })).posts;
   } catch (e) {
     $('main').innerHTML = `<p class="note">불러오기 실패: ${esc(e.message)}</p><button id="reset">설정 다시 하기</button>`;
-    $('reset').onclick = () => { store('api'); store('key'); initCfg(); showSetup(); };
+    $('reset').onclick = () => { store('api'); store('key'); cfg = {}; showSetup(); };
     return;
   }
   current ? null : showList();
