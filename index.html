@@ -38,6 +38,14 @@
   .post h2 { font-size: 21px; line-height: 1.4; margin: 6px 0 18px; }
   .post p { margin: 0; min-height: 1.6em; }
   .post h3 { font-size: 19px; margin: 0; }
+  .pic { display: block; width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 10px; margin: 6px 0; background: var(--chip); }
+  .pic.ph { display: flex; align-items: center; justify-content: center; color: var(--sub); font-size: 13px; }
+  .imgbox { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 14px; }
+  .imgbox .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .imgbox .row > * { flex: 1; }
+  .pic.ph { cursor: pointer; border: 1px dashed var(--line); }
+  .when { font-weight: 700; }
+  textarea.copy { min-height: 140px; font-size: 13px; margin-top: 8px; }
   .post hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
   .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
     padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); display: flex; gap: 8px; justify-content: center; }
@@ -63,12 +71,12 @@
 
 <script>
 const STATUS = {
-  draft: '검수 대기', publish_requested: '발행 대기', publishing: '발행 중',
+  draft: '검수 대기', publish_requested: '예약 중', scheduled: '예약됨', publishing: '발행 중',
   published: '발행 완료', failed: '발행 실패', rejected: '보류'
 };
 const TABS = [
   ['draft', '검수 대기', ['draft', 'failed']],
-  ['queue', '발행 진행', ['publish_requested', 'publishing']],
+  ['queue', '발행 예약', ['publish_requested', 'scheduled', 'publishing']],
   ['done', '발행 완료', ['published']],
   ['rejected', '보류', ['rejected']],
 ];
@@ -122,8 +130,14 @@ async function post(body) {
   return j;
 }
 
-function render(md) {   // 봇 마크업 → 미리보기
+function render(md, imgs) {   // 봇 마크업 → 미리보기
+  let map = {};
+  try { map = imgs ? JSON.parse(imgs) : {}; } catch (e) {}
   return md.split('\n').map(l => {
+    const m = l.trim().match(/^\[\[img:([^\]]+)\]\]$/);
+    if (m) return map[m[1]]
+      ? `<img class="pic" src="${esc(map[m[1]])}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+      : `<div class="pic ph">그림 ${esc(m[1])}</div>`;
     if (l.trim() === '---') return '<hr>';
     if (l.startsWith('## ')) return `<h3>${esc(l.slice(3))}</h3>`;
     if (l.startsWith('** ')) return `<p><b>${esc(l.slice(3))}</b></p>`;
@@ -134,6 +148,52 @@ function render(md) {   // 봇 마크업 → 미리보기
 function fmt(iso) {
   const d = new Date(iso); if (isNaN(d)) return '';
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function whenText(at) {
+  if (at === 'now') return '곧 발행';
+  if (!at || isNaN(+at)) return '';
+  const d = new Date(+at * 1000);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 발행 예정`;
+}
+function slots(body) { return [...(body || '').matchAll(/^\[\[img:([^\]]+)\]\]$/gm)].map(m => m[1]); }
+function imgMap(p) { try { return p.images ? JSON.parse(p.images) : {}; } catch (e) { return {}; } }
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+  ta.remove(); return ok;
+}
+
+// 폰 사진을 가로 최대 1600px JPEG로 줄여서 base64
+function shrink(file) {
+  return new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 1600 / img.width), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL('image/jpeg', 0.9).split(',')[1]);
+    };
+    img.onerror = rej; img.src = url;
+  });
+}
+
+async function uploadTo(p, files, names) {
+  for (let i = 0; i < files.length && i < names.length; i++) {
+    toast(`그림 올리는 중 ${i + 1}/${Math.min(files.length, names.length)}`);
+    try { await post({ action: 'img', id: p.id, name: names[i], mime: 'image/jpeg', data: await shrink(files[i]) }); }
+    catch (e) { toast('실패: ' + e.message); return; }
+  }
+  toast('그림 올리기 완료');
+  openPost(p.id);
+}
+
+function pickFiles(multiple, cb) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = multiple;
+  inp.onchange = () => cb([...inp.files]); inp.click();
 }
 
 function drawTabs() {
@@ -183,7 +243,8 @@ function showList() {
     <div class="card" data-id="${esc(p.id)}">
       <div class="t">${esc(p.title)}</div>
       <div class="meta"><span class="badge ${esc(p.status)}">${STATUS[p.status] || esc(p.status)}</span>
-        <span>${esc(p.category || p.slot)}</span><span>${fmt(p.created)}</span>${p.edited ? '<span>수정됨</span>' : ''}</div>
+        <span>${esc(p.category || p.slot)}</span><span>${fmt(p.created)}</span>${p.edited ? '<span>수정됨</span>' : ''}
+        ${p.status === 'scheduled' || p.status === 'publish_requested' ? `<span class="when">${whenText(p.publish_at) || '시간 정하는 중'}</span>` : ''}</div>
       ${p.status === 'failed' && p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
       ${p.url ? `<div class="meta"><a href="${esc(p.url)}" target="_blank" rel="noopener">블로그에서 보기</a></div>` : ''}
     </div>`).join('') : `<div class="empty">글이 없어요</div>`;
@@ -201,13 +262,38 @@ async function openPost(id, edit = false) {
   if (edit) {
     $('main').innerHTML = `
       <input id="eTitle" value="${esc(p.title)}">
-      <p class="help">## 큰 소제목 · ** 굵은 줄 · --- 구분선 · 빈 줄은 문단 간격</p>
+      <p class="help">## 큰 소제목 · ** 굵은 줄 · --- 구분선 · [[img:파일]] 그림 위치(지우면 그림 빠짐) · 빈 줄은 문단 간격</p>
       <textarea id="eBody">${esc(p.body)}</textarea>`;
   } else {
+    const names = slots(p.body), map = imgMap(p), have = names.filter(n => map[n]).length;
+    const editable = ['draft', 'failed', 'rejected'].includes(p.status);
     $('main').innerHTML = `
       ${p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
-      <article class="post"><h2>${esc(p.title)}</h2>${render(p.body)}</article>
+      ${p.status === 'scheduled' ? `<p class="when">${whenText(p.publish_at)}</p>` : ''}
+      ${names.length && editable ? `<div class="imgbox">
+        <b>그림 ${have}/${names.length}장</b>
+        <div class="help">① 요청문 복사 → ChatGPT(스킬 있는 채팅)에 붙여넣기 → ② 만들어진 그림을 순서대로 한꺼번에 선택. 빈 칸을 누르면 그 자리만 올려요.</div>
+        <div class="row"><button id="cp">① 그림 요청 복사</button><button class="primary" id="up">② 그림 올리기</button></div>
+      </div>` : ''}
+      <article class="post"><h2>${esc(p.title)}</h2>${render(p.body, p.images)}</article>
       ${p.url ? `<p><a href="${esc(p.url)}" target="_blank" rel="noopener">블로그에서 보기</a></p>` : ''}`;
+  }
+  if (!edit) {
+    const names = slots(p.body), map = imgMap(p);
+    if ($('cp')) $('cp').onclick = async () => {
+      if (await copyText(p.img_prompt || '')) return toast('복사했어요. ChatGPT에 붙여넣으세요');
+      const ta = document.createElement('textarea'); ta.className = 'copy'; ta.value = p.img_prompt || '';
+      $('cp').closest('.imgbox').append(ta); ta.focus(); ta.select(); toast('길게 눌러 복사하세요');
+    };
+    if ($('up')) $('up').onclick = () => pickFiles(true, files => {
+      const empty = names.filter(n => !map[n]);
+      const order = files.length >= names.length || !empty.length ? names : empty;  // 빈 자리부터 채움
+      uploadTo(p, files, order);
+    });
+    if (['draft', 'failed', 'rejected'].includes(p.status)) {
+      const els = $('main').querySelectorAll('.post .pic');
+      els.forEach((el, i) => { el.style.cursor = 'pointer'; el.onclick = () => pickFiles(false, f => uploadTo(p, f, [names[i]])); });
+    }
   }
   const bar = $('bar'); bar.hidden = false;
   const btn = (label, cls, fn) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.onclick = function (ev) { return fn.call(b, ev); }; return b; };
@@ -221,11 +307,21 @@ async function openPost(id, edit = false) {
     bar.append(
       btn('보류', '', () => act({ action: 'reject', id: p.id }, '보류했어요')),
       btn('수정', '', () => openPost(p.id, true)),
-      btn('발행하기', 'primary', function () {
+      btn('발행 예약', 'primary', function () {
         // 일부 모바일/앱 브라우저는 confirm 창을 막아서 화면 안에서 두 번 누르기로 확인
-        if (this.dataset.armed) return act({ action: 'publish', id: p.id }, '발행 요청했어요. sjm이 5분 안에 발행해요');
+        const names = slots(p.body), have = names.filter(n => imgMap(p)[n]).length;
+        if (this.dataset.armed) return act({ action: 'publish', id: p.id }, '예약했어요. 발행 시간은 무작위로 정해져요');
+        this.dataset.armed = '1';
+        this.textContent = have < names.length ? `그림 ${names.length - have}장 없음 · 한 번 더` : '한 번 더 누르면 예약';
+        setTimeout(() => { delete this.dataset.armed; this.textContent = '발행 예약'; }, 4000);
+      }));
+  } else if (p.status === 'scheduled' || p.status === 'publish_requested') {
+    bar.append(
+      btn('예약 취소', '', () => act({ action: 'restore', id: p.id }, '예약을 취소했어요')),
+      btn('지금 바로 발행', 'primary', function () {
+        if (this.dataset.armed) return act({ action: 'publish', id: p.id, now: true }, 'sjm이 5분 안에 발행해요');
         this.dataset.armed = '1'; this.textContent = '한 번 더 누르면 발행';
-        setTimeout(() => { delete this.dataset.armed; this.textContent = '발행하기'; }, 4000);
+        setTimeout(() => { delete this.dataset.armed; this.textContent = '지금 바로 발행'; }, 4000);
       }));
   } else if (p.status === 'rejected') {
     bar.append(btn('검수 대기로 되돌리기', '', () => act({ action: 'restore', id: p.id }, '되돌렸어요')));
