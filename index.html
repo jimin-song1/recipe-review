@@ -210,7 +210,7 @@ async function openPost(id, edit = false) {
       ${p.url ? `<p><a href="${esc(p.url)}" target="_blank" rel="noopener">블로그에서 보기</a></p>` : ''}`;
   }
   const bar = $('bar'); bar.hidden = false;
-  const btn = (label, cls, fn) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.onclick = fn; return b; };
+  const btn = (label, cls, fn) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.onclick = function (ev) { return fn.call(b, ev); }; return b; };
   bar.innerHTML = '';
   if (edit) {
     bar.append(
@@ -221,7 +221,12 @@ async function openPost(id, edit = false) {
     bar.append(
       btn('보류', '', () => act({ action: 'reject', id: p.id }, '보류했어요')),
       btn('수정', '', () => openPost(p.id, true)),
-      btn('발행하기', 'primary', () => { if (confirm('네이버 블로그에 발행할까요?')) act({ action: 'publish', id: p.id }, '발행 요청했어요. sjm이 곧 발행해요'); }));
+      btn('발행하기', 'primary', function () {
+        // 일부 모바일/앱 브라우저는 confirm 창을 막아서 화면 안에서 두 번 누르기로 확인
+        if (this.dataset.armed) return act({ action: 'publish', id: p.id }, '발행 요청했어요. sjm이 5분 안에 발행해요');
+        this.dataset.armed = '1'; this.textContent = '한 번 더 누르면 발행';
+        setTimeout(() => { delete this.dataset.armed; this.textContent = '발행하기'; }, 4000);
+      }));
   } else if (p.status === 'rejected') {
     bar.append(btn('검수 대기로 되돌리기', '', () => act({ action: 'restore', id: p.id }, '되돌렸어요')));
   } else {
@@ -230,7 +235,12 @@ async function openPost(id, edit = false) {
 }
 
 async function act(body, msg, reopen) {
-  try { await post(body); toast(msg); } catch (e) { return toast('실패: ' + e.message); }
+  toast('처리 중…');
+  $('bar').querySelectorAll('button').forEach(b => b.disabled = true);
+  try { await post(body); toast(msg); } catch (e) {
+    $('bar').querySelectorAll('button').forEach(b => b.disabled = false);
+    return toast('실패: ' + e.message);
+  }
   current = null;
   await refresh();
   if (reopen) openPost(body.id);
