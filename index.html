@@ -103,7 +103,11 @@ function load(k) {
   }
   return v;
 }
-function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+let toastT = null;
+function toast(msg, sticky) {   // sticky: 다음 메시지가 올 때까지 계속 표시
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); if (!sticky) toastT = setTimeout(() => t.classList.remove('show'), 1800);
+}
 
 // 설정: 주소 뒤 #api=...&key=... 로 한 번 열면 저장됨
 function initCfg() {
@@ -166,7 +170,7 @@ async function copyText(text) {
   ta.remove(); return ok;
 }
 
-// 원본 그대로 base64 (크기·화질 변경 없음)
+// 크기는 그대로(최대 2048px), 1MB 넘는 그림만 고화질 JPEG(92%)로 바꿔 용량을 줄임
 function toBase64(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -174,11 +178,26 @@ function toBase64(file) {
     r.onerror = rej; r.readAsDataURL(file);
   });
 }
+function prepare(file) {
+  if (file.size <= 1024 * 1024) return toBase64(file).then(data => ({ data, mime: file.type || 'image/png' }));
+  return new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 2048 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res({ data: c.toDataURL('image/jpeg', 0.92).split(',')[1], mime: 'image/jpeg' });
+    };
+    img.onerror = rej; img.src = url;
+  });
+}
 
 async function uploadTo(p, files, names) {
   for (let i = 0; i < files.length && i < names.length; i++) {
-    toast(`그림 올리는 중 ${i + 1}/${Math.min(files.length, names.length)}`);
-    try { await post({ action: 'img', id: p.id, name: names[i], mime: files[i].type || 'image/png', data: await toBase64(files[i]) }); }
+    toast(`그림 올리는 중 ${i + 1}/${Math.min(files.length, names.length)} · 화면을 켜두세요`, true);
+    try { const x = await prepare(files[i]); await post({ action: 'img', id: p.id, name: names[i], mime: x.mime, data: x.data }); }
     catch (e) { toast('실패: ' + e.message); return; }
   }
   toast('그림 올리기 완료');
@@ -221,7 +240,7 @@ async function expandZips(files) {
   const out = [];
   for (const f of files) {
     if (!/\.zip$/i.test(f.name) && !/zip/.test(f.type)) { out.push(f); continue; }
-    toast('압축 푸는 중…');
+    toast('압축 푸는 중…', true);
     out.push(...await unzip(f));
   }
   return out;
