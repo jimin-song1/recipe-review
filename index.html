@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>레시피 검수</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --ink: #1d1d1b; --sub: #6b6a66; --line: #e6e4df;
+    --accent: #03c75a; --accent-ink: #ffffff; --warn: #c2410c; --chip: #efede8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --card: #1f1f1d; --ink: #f1f0ec; --sub: #a3a29d; --line: #2f2f2c;
+      --accent: #1fd170; --accent-ink: #0b0b0b; --warn: #fb923c; --chip: #2a2a27; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
+    padding: 12px 16px 0; padding-top: calc(12px + env(safe-area-inset-top)); }
+  h1 { font-size: 18px; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  h1 button { font-size: 14px; }
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 10px; }
+  .tab { border: 0; background: var(--chip); color: var(--ink); padding: 6px 12px; border-radius: 999px; font-size: 14px; white-space: nowrap; }
+  .tab.on { background: var(--ink); color: var(--bg); }
+  main { max-width: 720px; margin: 0 auto; padding: 12px 16px 120px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 10px; cursor: pointer; }
+  .card .t { font-weight: 700; }
+  .meta { color: var(--sub); font-size: 13px; display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--chip); }
+  .badge.publish_requested, .badge.publishing { background: #fff3c4; color: #7a5a00; }
+  .badge.published { background: #d7f5e3; color: #05622f; }
+  .badge.failed { background: #ffe0d1; color: var(--warn); }
+  button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 8px 12px; }
+  .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+  .empty { color: var(--sub); text-align: center; padding: 48px 0; }
+  .post h2 { font-size: 21px; line-height: 1.4; margin: 6px 0 18px; }
+  .post p { margin: 0; min-height: 1.6em; }
+  .post h3 { font-size: 19px; margin: 0; }
+  .post hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); display: flex; gap: 8px; justify-content: center; }
+  .bar button { flex: 1; max-width: 220px; }
+  input, textarea { width: 100%; font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+  textarea { min-height: 60vh; font-size: 15px; }
+  .help { color: var(--sub); font-size: 13px; margin: 6px 0 12px; }
+  .note { color: var(--warn); font-size: 14px; margin-bottom: 10px; }
+  a { color: var(--accent); }
+  .toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+    padding: 8px 14px; border-radius: 999px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="hTitle">레시피 검수</span> <button id="hBtn">새로고침</button></h1>
+  <nav class="tabs" id="tabs"></nav>
+</header>
+<main id="main"></main>
+<div class="bar" id="bar" hidden></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const STATUS = {
+  draft: '검수 대기', publish_requested: '발행 대기', publishing: '발행 중',
+  published: '발행 완료', failed: '발행 실패', rejected: '보류'
+};
+const TABS = [
+  ['draft', '검수 대기', ['draft', 'failed']],
+  ['queue', '발행 진행', ['publish_requested', 'publishing']],
+  ['done', '발행 완료', ['published']],
+  ['rejected', '보류', ['rejected']],
+];
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let cfg = {}, posts = [], tab = 'draft', current = null;
+
+function store(k, v) { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} }
+function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+
+// 설정: 주소 뒤 #api=...&key=... 로 한 번 열면 저장됨
+function initCfg() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get('api') && h.get('key')) {
+    store('api', h.get('api')); store('key', h.get('key'));
+    history.replaceState(null, '', location.pathname);
+  }
+  cfg = { api: load('api'), key: load('key') };
+}
+
+async function api(params) {
+  const u = new URL(cfg.api);
+  Object.entries({ ...params, key: cfg.key }).forEach(([k, v]) => u.searchParams.set(k, v));
+  const r = await fetch(u, { redirect: 'follow' });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'API 오류');
+  return j;
+}
+async function post(body) {
+  const r = await fetch(cfg.api, { method: 'POST', body: JSON.stringify({ ...body, key: cfg.key }) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'API 오류');
+  return j;
+}
+
+function render(md) {   // 봇 마크업 → 미리보기
+  return md.split('\n').map(l => {
+    if (l.trim() === '---') return '<hr>';
+    if (l.startsWith('## ')) return `<h3>${esc(l.slice(3))}</h3>`;
+    if (l.startsWith('** ')) return `<p><b>${esc(l.slice(3))}</b></p>`;
+    return `<p>${esc(l)}</p>`;
+  }).join('');
+}
+
+function fmt(iso) {
+  const d = new Date(iso); if (isNaN(d)) return '';
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function drawTabs() {
+  $('tabs').innerHTML = TABS.map(([id, label, sts]) => {
+    const n = posts.filter(p => sts.includes(p.status)).length;
+    return `<button class="tab ${tab === id ? 'on' : ''}" data-t="${id}">${label} ${n}</button>`;
+  }).join('');
+  $('tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => { tab = b.dataset.t; showList(); });
+}
+
+function showSetup() {
+  $('tabs').innerHTML = ''; $('bar').hidden = true; $('hBtn').hidden = true;
+  $('main').innerHTML = `
+    <h2>처음 설정</h2>
+    <p class="help">sjm에서 만든 '검수 페이지 링크'로 열면 자동으로 입력돼요. 직접 넣어도 돼요.</p>
+    <label>Apps Script 웹 앱 주소<input id="sApi" placeholder="https://script.google.com/macros/s/.../exec"></label>
+    <p></p><label>접속 키<input id="sKey"></label><p></p>
+    <button class="primary" id="sSave">저장</button>`;
+  $('sSave').onclick = () => {
+    store('api', $('sApi').value.trim()); store('key', $('sKey').value.trim());
+    initCfg(); refresh();
+  };
+}
+
+async function refresh() {
+  if (!cfg.api || !cfg.key) return showSetup();
+  $('hBtn').hidden = false;
+  try {
+    posts = (await api({ light: 1 })).posts;
+  } catch (e) {
+    $('main').innerHTML = `<p class="note">불러오기 실패: ${esc(e.message)}</p><button id="reset">설정 다시 하기</button>`;
+    $('reset').onclick = () => { store('api'); store('key'); initCfg(); showSetup(); };
+    return;
+  }
+  current ? null : showList();
+}
+
+function showList() {
+  current = null; $('bar').hidden = true; $('hTitle').textContent = '레시피 검수'; $('hBtn').textContent = '새로고침';
+  $('hBtn').onclick = refresh;
+  drawTabs();
+  const sts = TABS.find(t => t[0] === tab)[2];
+  const list = posts.filter(p => sts.includes(p.status));
+  $('main').innerHTML = list.length ? list.map(p => `
+    <div class="card" data-id="${esc(p.id)}">
+      <div class="t">${esc(p.title)}</div>
+      <div class="meta"><span class="badge ${esc(p.status)}">${STATUS[p.status] || esc(p.status)}</span>
+        <span>${esc(p.category || p.slot)}</span><span>${fmt(p.created)}</span>${p.edited ? '<span>수정됨</span>' : ''}</div>
+      ${p.status === 'failed' && p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
+      ${p.url ? `<div class="meta"><a href="${esc(p.url)}" target="_blank" rel="noopener">블로그에서 보기</a></div>` : ''}
+    </div>`).join('') : `<div class="empty">글이 없어요</div>`;
+  $('main').querySelectorAll('.card').forEach(c => c.onclick = () => openPost(c.dataset.id));
+}
+
+async function openPost(id, edit = false) {
+  $('main').innerHTML = '<div class="empty">불러오는 중…</div>';
+  try { current = (await api({ action: 'get', id })).post; } catch (e) { toast(e.message); return showList(); }
+  if (!current) return showList();
+  $('tabs').innerHTML = '';
+  $('hTitle').textContent = STATUS[current.status] || '';
+  $('hBtn').textContent = '목록'; $('hBtn').onclick = () => { current = null; refresh(); };
+  const p = current;
+  if (edit) {
+    $('main').innerHTML = `
+      <input id="eTitle" value="${esc(p.title)}">
+      <p class="help">## 큰 소제목 · ** 굵은 줄 · --- 구분선 · 빈 줄은 문단 간격</p>
+      <textarea id="eBody">${esc(p.body)}</textarea>`;
+  } else {
+    $('main').innerHTML = `
+      ${p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
+      <article class="post"><h2>${esc(p.title)}</h2>${render(p.body)}</article>
+      ${p.url ? `<p><a href="${esc(p.url)}" target="_blank" rel="noopener">블로그에서 보기</a></p>` : ''}`;
+  }
+  const bar = $('bar'); bar.hidden = false;
+  const btn = (label, cls, fn) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.onclick = fn; return b; };
+  bar.innerHTML = '';
+  if (edit) {
+    bar.append(
+      btn('취소', '', () => openPost(p.id)),
+      btn('저장', '', () => act({ action: 'save', id: p.id, title: $('eTitle').value, body: $('eBody').value }, '저장했어요', true)),
+      btn('저장 후 발행', 'primary', () => act({ action: 'publish', id: p.id, title: $('eTitle').value, body: $('eBody').value }, '발행 요청했어요')));
+  } else if (p.status === 'draft' || p.status === 'failed') {
+    bar.append(
+      btn('보류', '', () => act({ action: 'reject', id: p.id }, '보류했어요')),
+      btn('수정', '', () => openPost(p.id, true)),
+      btn('발행하기', 'primary', () => { if (confirm('네이버 블로그에 발행할까요?')) act({ action: 'publish', id: p.id }, '발행 요청했어요. sjm이 곧 발행해요'); }));
+  } else if (p.status === 'rejected') {
+    bar.append(btn('검수 대기로 되돌리기', '', () => act({ action: 'restore', id: p.id }, '되돌렸어요')));
+  } else {
+    bar.hidden = true;
+  }
+}
+
+async function act(body, msg, reopen) {
+  try { await post(body); toast(msg); } catch (e) { return toast('실패: ' + e.message); }
+  current = null;
+  await refresh();
+  if (reopen) openPost(body.id);
+}
+
+initCfg();
+refresh();
+setInterval(() => { if (!current && document.visibilityState === 'visible') refresh(); }, 30000);
+</script>
+</body>
+</html>
