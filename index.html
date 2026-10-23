@@ -166,25 +166,19 @@ async function copyText(text) {
   ta.remove(); return ok;
 }
 
-// 폰 사진을 가로 최대 1600px JPEG로 줄여서 base64
-function shrink(file) {
+// 원본 그대로 base64 (크기·화질 변경 없음)
+function toBase64(file) {
   return new Promise((res, rej) => {
-    const img = new Image(), url = URL.createObjectURL(file);
-    img.onload = () => {
-      const k = Math.min(1, 1600 / img.width), c = document.createElement('canvas');
-      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url);
-      res(c.toDataURL('image/jpeg', 0.9).split(',')[1]);
-    };
-    img.onerror = rej; img.src = url;
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = rej; r.readAsDataURL(file);
   });
 }
 
 async function uploadTo(p, files, names) {
   for (let i = 0; i < files.length && i < names.length; i++) {
     toast(`그림 올리는 중 ${i + 1}/${Math.min(files.length, names.length)}`);
-    try { await post({ action: 'img', id: p.id, name: names[i], mime: 'image/jpeg', data: await shrink(files[i]) }); }
+    try { await post({ action: 'img', id: p.id, name: names[i], mime: files[i].type || 'image/png', data: await toBase64(files[i]) }); }
     catch (e) { toast('실패: ' + e.message); return; }
   }
   toast('그림 올리기 완료');
@@ -192,8 +186,57 @@ async function uploadTo(p, files, names) {
 }
 
 function pickFiles(multiple, cb) {
-  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = multiple;
+  const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = multiple;
+  inp.accept = multiple ? 'image/*,.zip,application/zip' : 'image/*';
   inp.onchange = () => cb([...inp.files]); inp.click();
+}
+
+// ZIP 풀기: 외부 라이브러리 없이 브라우저 내장 DecompressionStream 사용
+async function unzip(file) {
+  const buf = new Uint8Array(await file.arrayBuffer()), dv = new DataView(buf.buffer);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('압축 파일을 읽을 수 없어요');
+  let off = dv.getUint32(eocd + 16, true); const n = dv.getUint16(eocd + 10, true), out = [];
+  for (let k = 0; k < n; k++) {
+    const method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true);
+    const nl = dv.getUint16(off + 28, true), el = dv.getUint16(off + 30, true), cl = dv.getUint16(off + 32, true);
+    const lho = dv.getUint32(off + 42, true), name = new TextDecoder().decode(buf.subarray(off + 46, off + 46 + nl));
+    off += 46 + nl + el + cl;
+    if (name.endsWith('/') || !/\.(png|jpe?g|webp)$/i.test(name) || /(^|\/)(__MACOSX|\.)/.test(name)) continue;
+    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+    const raw = buf.subarray(start, start + csize);
+    let data;
+    if (method === 0) data = raw;
+    else if (method === 8) data = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    else continue;
+    const type = /\.png$/i.test(name) ? 'image/png' : /\.webp$/i.test(name) ? 'image/webp' : 'image/jpeg';
+    out.push(new File([data], name.split('/').pop(), { type }));
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+// 압축 파일이 섞여 있으면 풀어서 그림 파일 목록으로 (파일 이름순)
+async function expandZips(files) {
+  const out = [];
+  for (const f of files) {
+    if (!/\.zip$/i.test(f.name) && !/zip/.test(f.type)) { out.push(f); continue; }
+    toast('압축 푸는 중…');
+    out.push(...await unzip(f));
+  }
+  return out;
+}
+
+// 파일 이름이 자리 이름(00_cover 등)과 같으면 그 자리에, 나머지는 빈 자리에 순서대로
+function assign(files, names, map) {
+  const stem = n => n.replace(/\.[^.]+$/, '').toLowerCase();
+  const byName = {}, rest = [];
+  files.forEach(f => { const m = names.find(n => stem(n) === stem(f.name)); m && !byName[m] ? byName[m] = f : rest.push(f); });
+  const free = names.filter(n => !byName[n]);
+  const target = rest.length >= free.length ? free : free.filter(n => !map[n]).concat(free.filter(n => map[n]));
+  rest.forEach((f, i) => { if (target[i]) byName[target[i]] = f; });
+  const pairs = names.filter(n => byName[n]).map(n => [n, byName[n]]);
+  return [pairs.map(p => p[1]), pairs.map(p => p[0])];
 }
 
 function drawTabs() {
@@ -272,7 +315,7 @@ async function openPost(id, edit = false) {
       ${p.status === 'scheduled' ? `<p class="when">${whenText(p.publish_at)}</p>` : ''}
       ${names.length && editable ? `<div class="imgbox">
         <b>그림 ${have}/${names.length}장</b>
-        <div class="help">① 요청문 복사 → ChatGPT(스킬 있는 채팅)에 붙여넣기 → ② 만들어진 그림을 순서대로 한꺼번에 선택. 빈 칸을 누르면 그 자리만 올려요.</div>
+        <div class="help">① 요청문 복사 → ChatGPT(스킬 있는 채팅)에 붙여넣기 → ② ChatGPT가 준 ZIP 파일(또는 그림들)을 선택. 파일 이름이 00_cover처럼 같으면 그 자리로 들어가요. 빈 칸을 누르면 그 자리만 올려요.</div>
         <div class="row"><button id="cp">① 그림 요청 복사</button><button class="primary" id="up">② 그림 올리기</button></div>
       </div>` : ''}
       <article class="post"><h2>${esc(p.title)}</h2>${render(p.body, p.images)}</article>
@@ -285,10 +328,11 @@ async function openPost(id, edit = false) {
       const ta = document.createElement('textarea'); ta.className = 'copy'; ta.value = p.img_prompt || '';
       $('cp').closest('.imgbox').append(ta); ta.focus(); ta.select(); toast('길게 눌러 복사하세요');
     };
-    if ($('up')) $('up').onclick = () => pickFiles(true, files => {
-      const empty = names.filter(n => !map[n]);
-      const order = files.length >= names.length || !empty.length ? names : empty;  // 빈 자리부터 채움
-      uploadTo(p, files, order);
+    if ($('up')) $('up').onclick = () => pickFiles(true, async files => {
+      try { files = await expandZips(files); } catch (e) { return toast(e.message); }
+      if (!files.length) return toast('그림 파일이 없어요');
+      const [fs, ns] = assign(files, names, map);
+      uploadTo(p, fs, ns);
     });
     if (['draft', 'failed', 'rejected'].includes(p.status)) {
       const els = $('main').querySelectorAll('.post .pic');
