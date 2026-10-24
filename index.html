@@ -55,6 +55,19 @@
   .help { color: var(--sub); font-size: 13px; margin: 6px 0 12px; }
   .note { color: var(--warn); font-size: 14px; margin-bottom: 10px; }
   a { color: var(--accent); }
+  .badge.link_wait { background: #fff3c4; color: #7a5a00; }
+  .badge.linked { background: #d7f5e3; color: #05622f; }
+  .badge.link_skip { background: var(--chip); color: var(--sub); }
+  .tcard { cursor: default; }
+  .tcard .body { white-space: pre-line; margin-top: 8px; font-size: 15px; }
+  .kind { font-size: 12px; padding: 1px 8px; border-radius: 999px; font-weight: 700; }
+  .kind.link { background: #ffe4cc; color: #9a3a00; }
+  .kind.talk { background: #dbeafe; color: #1e40af; }
+  .checks { display: flex; gap: 12px; flex-wrap: wrap; font-size: 14px; margin-top: 6px; font-weight: 600; }
+  .prod { font-size: 13px; color: var(--sub); margin-top: 6px; }
+  .tcard img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; float: right; margin: 0 0 6px 10px; background: var(--chip); }
+  .tcard .reply { white-space: pre-line; font-size: 13px; color: var(--sub); border-left: 3px solid var(--line); padding-left: 8px; margin-top: 8px; word-break: break-all; }
+  .sum { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; color: var(--sub); }
   .toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: var(--ink); color: var(--bg);
     padding: 8px 14px; border-radius: 999px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
@@ -82,7 +95,9 @@ const TABS = [
 ];
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-let cfg = {}, posts = [], tab = 'draft', current = null;
+let cfg = {}, posts = [], tab = 'draft', current = null, threads = [];
+const T_STATUS = { published: '발행 완료', link_wait: '발행 완료 · 링크 대기', linked: '발행 완료 · 링크 달림',
+  link_skip: '발행 완료 · 링크 안 담', failed: '발행 실패' };
 
 const DEFAULT_API = 'https://script.google.com/macros/s/AKfycbwxiSopXrZHBD5oizJBvveLcU6JemqhvyxGr_6XTRdRkyafILkCx3xvDkEOG3pAyWr-/exec';
 // 저장: localStorage → 안 되면 쿠키 (사파리 개인정보 보호·앱 내 브라우저 대비)
@@ -262,7 +277,7 @@ function drawTabs() {
   $('tabs').innerHTML = TABS.map(([id, label, sts]) => {
     const n = posts.filter(p => sts.includes(p.status)).length;
     return `<button class="tab ${tab === id ? 'on' : ''}" data-t="${id}">${label} ${n}</button>`;
-  }).join('');
+  }).join('') + `<button class="tab ${tab === 'threads' ? 'on' : ''}" data-t="threads">🧵 스레드 ${threads.length}</button>`;
   $('tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => { tab = b.dataset.t; showList(); });
 }
 
@@ -287,6 +302,7 @@ async function refresh() {
   $('hBtn').hidden = false;
   try {
     posts = (await api({ light: 1 })).posts;
+    try { threads = (await api({ sheet: 'threads' })).posts || []; } catch (e) { threads = []; }
   } catch (e) {
     $('main').innerHTML = `<p class="note">불러오기 실패: ${esc(e.message)}</p><button id="reset">설정 다시 하기</button>`;
     $('reset').onclick = () => { store('api'); store('key'); cfg = {}; showSetup(); };
@@ -299,6 +315,7 @@ function showList() {
   current = null; $('bar').hidden = true; $('hTitle').textContent = '레시피 검수'; $('hBtn').textContent = '새로고침';
   $('hBtn').onclick = refresh;
   drawTabs();
+  if (tab === 'threads') return showThreads();
   const sts = TABS.find(t => t[0] === tab)[2];
   const list = posts.filter(p => sts.includes(p.status));
   $('main').innerHTML = list.length ? list.map(p => `
@@ -311,6 +328,34 @@ function showList() {
       ${p.url ? `<div class="meta"><a href="${esc(p.url)}" target="_blank" rel="noopener">블로그에서 보기</a></div>` : ''}
     </div>`).join('') : `<div class="empty">글이 없어요</div>`;
   $('main').querySelectorAll('.card').forEach(c => c.onclick = () => openPost(c.dataset.id));
+}
+
+function checks(t) {   // ✅ 끝난 단계 / ⬜ 아직 / ➖ 해당 없음
+  const isLink = t.kind === 'link' || t.reply;
+  const pub = t.status === 'failed' ? '❌ 발행 실패' : '✅ 발행';
+  if (!isLink) return `<span>${pub}</span><span>➖ 링크 없음 (공감글)</span>`;
+  const link = t.status === 'linked' ? '✅ 링크 달림' : t.status === 'link_wait' ? '⬜ 링크 대기 (30분 안에 300)' : '➖ 링크 안 담 (조회 부족)';
+  return `<span>${pub}</span><span>${link}</span>`;
+}
+
+function showThreads() {
+  $('hTitle').textContent = '스레드 발행';
+  const linked = threads.filter(t => t.status === 'linked').length, wait = threads.filter(t => t.status === 'link_wait').length;
+  const views = threads.reduce((a, t) => a + (+t.views || 0), 0);
+  $('main').innerHTML = (threads.length ? `<div class="sum"><span>전체 ${threads.length}개</span><span>🛒 링크글 ${threads.filter(t => t.kind === 'link' || t.reply).length}</span><span>💬 공감글 ${threads.filter(t => !(t.kind === 'link' || t.reply)).length}</span><span>링크 달림 ${linked}</span><span>링크 대기 ${wait}</span><span>조회 합계 ${views.toLocaleString()}</span></div>` : '') +
+    (threads.length ? threads.map(t => `
+    <div class="card tcard">
+      ${t.image ? `<img src="${esc(t.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
+      <div class="t">${esc(t.first_line)}</div>
+      <div class="meta">${t.kind === 'link' || t.reply ? '<span class="kind link">🛒 링크글</span>' : '<span class="kind talk">💬 공감글</span>'}
+        <span>${fmt(t.created)}</span>${t.views ? `<span>조회 ${(+t.views).toLocaleString()}</span>` : ''}
+        ${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">스레드에서 보기</a>` : ''}</div>
+      <div class="checks">${checks(t)}</div>
+      ${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}
+      <div class="body">${esc(t.body)}</div>
+      ${t.product ? `<div class="prod">소개한 상품: ${esc(t.product)}</div>` : ''}
+      ${t.status === 'linked' && t.reply ? `<div class="reply">${esc(t.reply)}</div>` : ''}
+    </div>`).join('') : `<div class="empty">아직 올린 스레드 글이 없어요</div>`);
 }
 
 async function openPost(id, edit = false) {
