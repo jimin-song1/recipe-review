@@ -15,6 +15,7 @@
       --accent: #1fd170; --accent-ink: #0b0b0b; --warn: #fb923c; --chip: #2a2a27; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--ink);
     font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; }
   header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
@@ -64,6 +65,12 @@
   .kind.link { background: #ffe4cc; color: #9a3a00; }
   .kind.talk { background: #dbeafe; color: #1e40af; }
   .checks { display: flex; gap: 12px; flex-wrap: wrap; font-size: 14px; margin-top: 6px; font-weight: 600; }
+  .sec { font-size: 16px; margin: 18px 0 8px; } .sec small { color: var(--sub); font-weight: 400; }
+  .empty.small { padding: 12px 0; font-size: 14px; }
+  .tcard.todo { border: 2px solid var(--accent); }
+  .tbtn { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; clear: both; }
+  .tbtn > * { flex: 1; text-align: center; }
+  .btnlike { border-radius: 10px; border: 1px solid var(--line); padding: 8px 12px; color: var(--ink); text-decoration: none; background: var(--card); }
   .prod { font-size: 13px; color: var(--sub); margin-top: 6px; }
   .tcard img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; float: right; margin: 0 0 6px 10px; background: var(--chip); }
   .tcard .reply { white-space: pre-line; font-size: 13px; color: var(--sub); border-left: 3px solid var(--line); padding-left: 8px; margin-top: 8px; word-break: break-all; }
@@ -277,7 +284,7 @@ function drawTabs() {
   $('tabs').innerHTML = TABS.map(([id, label, sts]) => {
     const n = posts.filter(p => sts.includes(p.status)).length;
     return `<button class="tab ${tab === id ? 'on' : ''}" data-t="${id}">${label} ${n}</button>`;
-  }).join('') + `<button class="tab ${tab === 'threads' ? 'on' : ''}" data-t="threads">🧵 스레드 ${threads.length}</button>`;
+  }).join('') + `<button class="tab ${tab === 'threads' ? 'on' : ''}" data-t="threads">🧵 스레드 ${threads.filter(t => t.status === 'ready' || t.status === 'link_ready').length ? '🔴 ' + threads.filter(t => t.status === 'ready' || t.status === 'link_ready').length : threads.length}</button>`;
   $('tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => { tab = b.dataset.t; showList(); });
 }
 
@@ -331,31 +338,72 @@ function showList() {
 }
 
 function checks(t) {   // ✅ 끝난 단계 / ⬜ 아직 / ➖ 해당 없음
-  const isLink = t.kind === 'link' || t.reply;
-  const pub = t.status === 'failed' ? '❌ 발행 실패' : '✅ 발행';
+  const isLink = t.kind === 'link';
+  const s = t.status;
+  const pub = s === 'ready' ? '⬜ 폰으로 올리기' : s === 'skipped' ? '➖ 건너뜀' : '✅ 올림';
   if (!isLink) return `<span>${pub}</span><span>➖ 링크 없음 (공감글)</span>`;
-  const link = t.status === 'linked' ? '✅ 링크 달림' : t.status === 'link_wait' ? '⬜ 링크 대기 (30분 안에 300)' : '➖ 링크 안 담 (조회 부족)';
+  const link = s === 'linked' ? '✅ 링크 달림' : s === 'link_ready' ? '🔗 지금 링크 달 차례' :
+    s === 'link_skip' ? '➖ 링크 안 담 (30분 조회 부족)' : s === 'ready' || s === 'skipped' ? '⬜ 링크' : '⏳ 조회수 확인 중 (30분 안에 300)';
   return `<span>${pub}</span><span>${link}</span>`;
 }
 
-function showThreads() {
-  $('hTitle').textContent = '스레드 발행';
-  const linked = threads.filter(t => t.status === 'linked').length, wait = threads.filter(t => t.status === 'link_wait').length;
-  const views = threads.reduce((a, t) => a + (+t.views || 0), 0);
-  $('main').innerHTML = (threads.length ? `<div class="sum"><span>전체 ${threads.length}개</span><span>🛒 링크글 ${threads.filter(t => t.kind === 'link' || t.reply).length}</span><span>💬 공감글 ${threads.filter(t => !(t.kind === 'link' || t.reply)).length}</span><span>링크 달림 ${linked}</span><span>링크 대기 ${wait}</span><span>조회 합계 ${views.toLocaleString()}</span></div>` : '') +
-    (threads.length ? threads.map(t => `
-    <div class="card tcard">
+function tcard(t) {
+  const btns = t.status === 'ready' ? `
+      <div class="row tbtn">
+        <button data-a="copy" data-id="${esc(t.id)}">① 본문 복사</button>
+        ${t.image ? `<a class="btnlike" href="${esc(t.image)}" target="_blank" rel="noopener">② 사진 열기·저장</a>` : ''}
+        <button class="primary" data-a="posted" data-id="${esc(t.id)}">③ 올렸어요 ✅</button>
+      </div>
+      <div class="row tbtn"><button data-a="skip" data-id="${esc(t.id)}">이 글 건너뛰기</button></div>`
+    : t.status === 'link_ready' ? `
+      <div class="reply">${esc(t.reply)}</div>
+      <div class="row tbtn">
+        <button data-a="copyreply" data-id="${esc(t.id)}">① 링크 타래 복사</button>
+        <button class="primary" data-a="linked" data-id="${esc(t.id)}">② 링크 달았어요 ✅</button>
+      </div>` : '';
+  return `
+    <div class="card tcard ${t.status === 'ready' || t.status === 'link_ready' ? 'todo' : ''}">
       ${t.image ? `<img src="${esc(t.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
       <div class="t">${esc(t.first_line)}</div>
-      <div class="meta">${t.kind === 'link' || t.reply ? '<span class="kind link">🛒 링크글</span>' : '<span class="kind talk">💬 공감글</span>'}
-        <span>${fmt(t.created)}</span>${t.views ? `<span>조회 ${(+t.views).toLocaleString()}</span>` : ''}
+      <div class="meta">${t.kind === 'link' ? '<span class="kind link">🛒 링크글</span>' : '<span class="kind talk">💬 공감글</span>'}
+        <span>${fmt(t.posted_at || t.created)}</span>${t.views ? `<span>조회 ${(+t.views).toLocaleString()}</span>` : ''}
         ${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">스레드에서 보기</a>` : ''}</div>
       <div class="checks">${checks(t)}</div>
       ${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}
       <div class="body">${esc(t.body)}</div>
       ${t.product ? `<div class="prod">소개한 상품: ${esc(t.product)}</div>` : ''}
       ${t.status === 'linked' && t.reply ? `<div class="reply">${esc(t.reply)}</div>` : ''}
-    </div>`).join('') : `<div class="empty">아직 올린 스레드 글이 없어요</div>`);
+      ${btns}
+    </div>`;
+}
+
+function showThreads() {
+  $('hTitle').textContent = '스레드';
+  const ready = threads.filter(t => t.status === 'ready'), linkr = threads.filter(t => t.status === 'link_ready');
+  const rest = threads.filter(t => t.status !== 'ready' && t.status !== 'link_ready' && t.status !== 'skipped');
+  const linked = threads.filter(t => t.status === 'linked').length;
+  const views = rest.reduce((a, t) => a + (+t.views || 0), 0);
+  const sec = (title, list, empty) => `<h3 class="sec">${title} <small>${list.length}</small></h3>` +
+    (list.length ? list.map(tcard).join('') : `<div class="empty small">${empty}</div>`);
+  $('main').innerHTML =
+    sec('🔗 링크 달 차례', linkr, '지금은 없어요') +
+    sec('📱 지금 올릴 글', ready, '봇이 정한 시간에 여기 올라와요') +
+    `<div class="sum"><span>올린 글 ${rest.length}개</span><span>링크 달림 ${linked}</span><span>조회 합계 ${views.toLocaleString()}</span></div>` +
+    sec('✅ 올린 글', rest, '아직 없어요');
+  $('main').querySelectorAll('.tbtn [data-a]').forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    const t = threads.find(x => x.id === b.dataset.id); if (!t) return;
+    const a = b.dataset.a;
+    if (a === 'copy') return toast(await copyText(t.body) ? '본문 복사했어요. 스레드에 붙여넣으세요' : '복사 실패 - 길게 눌러 복사하세요');
+    if (a === 'copyreply') return toast(await copyText(t.reply) ? '링크 타래 복사했어요. 내 글에 답글로 붙여넣으세요' : '복사 실패');
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; const o = b.textContent; b.textContent = '한 번 더 누르면 확정'; setTimeout(() => { b.dataset.armed = ''; b.textContent = o; }, 4000); return; }
+    const fields = a === 'posted' ? { status: 'posted', posted_at: new Date().toISOString() }
+      : a === 'linked' ? { status: 'linked' } : { status: 'skipped' };
+    toast('처리 중…');
+    try { await post({ action: 'tupdate', id: t.id, fields }); } catch (e) { return toast('실패: ' + e.message); }
+    toast(a === 'posted' ? (t.kind === 'link' ? '좋아요! 30분 동안 조회수 지켜볼게요' : '올림 처리했어요') : a === 'linked' ? '링크 달림 처리했어요' : '건너뛰었어요');
+    await refresh(); tab = 'threads'; showList();
+  });
 }
 
 async function openPost(id, edit = false) {
