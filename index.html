@@ -144,7 +144,7 @@ function initCfg() {
 async function api(params) {
   const u = new URL(cfg.api);
   Object.entries({ ...params, key: cfg.key }).forEach(([k, v]) => u.searchParams.set(k, v));
-  const r = await fetch(u, { redirect: 'follow' });
+  const r = await fetch(u.toString(), { redirect: 'follow' });
   const j = await r.json();
   if (!j.ok) throw new Error(j.error || 'API 오류');
   return j;
