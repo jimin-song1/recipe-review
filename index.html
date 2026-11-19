@@ -18,7 +18,8 @@
   [hidden] { display: none !important; }
   .thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
   .thumbs .th { position: relative; width: 72px; height: 72px; }
-  .thumbs img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
+  .thumbs img, .thumbs video { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
+  .thumbs em { position: absolute; left: 4px; bottom: 2px; font-style: normal; }
   .thumbs b { position: absolute; left: 4px; top: 2px; color: #fff; text-shadow: 0 0 3px #000; font-size: 13px; }
   .thumbs i { position: absolute; right: 2px; top: 0; color: #fff; background: rgba(0,0,0,.55); border-radius: 50%; width: 20px; height: 20px; text-align: center; font-style: normal; font-size: 13px; line-height: 20px; cursor: pointer; }
   .mine select, .mine textarea, .mine input { width: 100%; box-sizing: border-box; }
@@ -183,6 +184,8 @@ function render(md, imgs) {   // 봇 마크업 → 미리보기
     if (m) return map[m[1]]
       ? `<img class="pic" src="${esc(map[m[1]])}" alt="" loading="lazy" referrerpolicy="no-referrer">`
       : `<div class="pic ph">그림 ${esc(m[1])}</div>`;
+    const v = l.trim().match(/^\[\[vid:([^\]]+)\]\]$/);
+    if (v) return `<div class="pic ph">🎬 영상 ${esc(v[1])} (편집본은 네이버 임시저장 글에서 확인)</div>`;
     if (l.trim() === '---') return '<hr>';
     if (l.startsWith('## ')) return `<h3>${esc(l.slice(3))}</h3>`;
     if (l.startsWith('** ')) return `<p><b>${esc(l.slice(3))}</b></p>`;
@@ -557,9 +560,9 @@ function showMine() {
       <p></p><label>카테고리 (블로그에 있는 이름 그대로)<input id="mCat" value="${esc(lastCat)}" placeholder="예: 내돈내산 후기"></label>
       <p></p><label>메모 (생각나는 대로 짧게)
         <textarea id="mMemo" rows="7" placeholder="예) GS25 남쏨타이 오렌지주스. 2000원 330ml. 차 오래 타서 미식거릴 때 마셨는데 안 쓰고 달달상콤해서 속이 편했음. 과육 알갱이 있음. 175kcal라 단 건 주의"></textarea></label>
-      <p></p><div class="row"><button id="mPick">📷 사진 고르기</button><span id="mCount" class="help">사진 0장</span></div>
+      <p></p><div class="row"><button id="mPick">📷 사진·영상 고르기</button><span id="mCount" class="help">사진 0장</span></div>
       <div id="mThumbs" class="thumbs"></div>
-      <p class="help">첫 번째 사진이 대표 사진이 돼요. 고른 순서대로 들어가요.</p>
+      <p class="help">고른 순서대로 글에 들어가고, 썸네일은 제일 잘 나온 사진으로 자동으로 만들어요. 영상은 필요한 장면만 잘라서 최대 45초로 넣어요.</p>
       <button class="primary" id="mGo">글 써주세요 ✍️</button>
     </div>
     ${mine.length ? '<h3>요청한 글</h3>' + mine.map(p => `
@@ -569,12 +572,23 @@ function showMine() {
         ${p.status === 'write_failed' ? `<div class="row"><button data-retry="${esc(p.id)}">다시 시도</button></div>` : ''}
       </div>`).join('') : ''}`;
   const drawThumbs = () => {
-    $('mCount').textContent = `사진 ${mineFiles.length}장`;
-    $('mThumbs').innerHTML = mineFiles.map((f, i) => `<span class="th"><img src="${URL.createObjectURL(f)}"><b>${i + 1}</b><i data-del="${i}">✕</i></span>`).join('');
+    const nv = mineFiles.filter(f => f.type.startsWith('video/')).length;
+    $('mCount').textContent = `사진 ${mineFiles.length - nv}장` + (nv ? ` · 영상 ${nv}개` : '');
+    $('mThumbs').innerHTML = mineFiles.map((f, i) => `<span class="th">${f.type.startsWith('video/')
+      ? `<video src="${URL.createObjectURL(f)}#t=0.5" muted playsinline></video><em>🎬</em>` : `<img src="${URL.createObjectURL(f)}">`}<b>${i + 1}</b><i data-del="${i}">✕</i></span>`).join('');
     $('mThumbs').querySelectorAll('[data-del]').forEach(x => x.onclick = () => { mineFiles.splice(+x.dataset.del, 1); drawThumbs(); });
   };
   drawThumbs();
-  $('mPick').onclick = () => pickFiles(true, fs => { mineFiles = mineFiles.concat(fs.filter(f => f.type.startsWith('image/'))).slice(0, 20); drawThumbs(); });
+  $('mPick').onclick = () => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.accept = 'image/*,video/*';
+    inp.onchange = () => {
+      const fs = [...inp.files].filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+      const big = fs.find(f => f.type.startsWith('video/') && f.size > 400 * 1024 * 1024);
+      if (big) toast('영상이 너무 커요 (400MB 이하로)');
+      mineFiles = mineFiles.concat(fs.filter(f => f !== big)).slice(0, 20); drawThumbs();
+    };
+    inp.click();
+  };
   $('main').querySelectorAll('[data-retry]').forEach(b => b.onclick = async () => {
     try { await post({ action: 'update', id: b.dataset.retry, fields: { status: 'request', note: '' } }); toast('다시 요청했어요'); refresh(); }
     catch (e) { toast('실패: ' + e.message); }
@@ -582,7 +596,7 @@ function showMine() {
   $('mGo').onclick = async function () {
     const memo = $('mMemo').value.trim(), cat = $('mCat').value.trim(), kind = $('mKind').value;
     if (!memo) return toast('메모를 적어 주세요');
-    if (!mineFiles.length) return toast('사진을 1장 이상 골라 주세요');
+    if (!mineFiles.length) return toast('사진이나 영상을 1개 이상 골라 주세요');
     if (this.dataset.busy) return; this.dataset.busy = 1; this.disabled = true;
     store('mine_cat', cat);
     const d = new Date(), z = n => String(n).padStart(2, '0');
@@ -590,10 +604,21 @@ function showMine() {
     try {
       await post({ action: 'add', id, post: { id, slot: '내글', category: cat, title: '✍️ ' + memo.slice(0, 30),
         body: memo, img_prompt: memo, note: '종류:' + kind, status: 'uploading' } });
+      const CH = 6 * 1024 * 1024;   // 영상은 6MB씩 나눠 올림
       for (let i = 0; i < mineFiles.length; i++) {
-        toast(`사진 올리는 중 ${i + 1}/${mineFiles.length} · 화면을 켜두세요`, true);
-        const x = await prepare(mineFiles[i]);
-        await post({ action: 'img', id, name: `photo${z(i + 1)}.jpg`, mime: x.mime, data: x.data });
+        const f = mineFiles[i];
+        if (f.type.startsWith('video/')) {
+          const n = Math.ceil(f.size / CH);
+          for (let k = 0; k < n; k++) {
+            toast(`영상 올리는 중 ${i + 1}/${mineFiles.length} (${Math.round((k + 1) / n * 100)}%) · 화면을 켜두세요`, true);
+            const data = await toBase64(f.slice(k * CH, (k + 1) * CH));
+            await post({ action: 'img', id, name: `video${z(i + 1)}_p${String(k).padStart(3, '0')}.bin`, mime: 'application/octet-stream', data });
+          }
+        } else {
+          toast(`사진 올리는 중 ${i + 1}/${mineFiles.length} · 화면을 켜두세요`, true);
+          const x = await prepare(f);
+          await post({ action: 'img', id, name: `photo${z(i + 1)}.jpg`, mime: x.mime, data: x.data });
+        }
       }
       await post({ action: 'update', id, fields: { status: 'request', note: '종류:' + kind } });
       mineFiles = []; toast('요청 완료! 5~10분 뒤 검수 대기에 올라와요');
