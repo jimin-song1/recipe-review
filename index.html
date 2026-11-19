@@ -16,6 +16,12 @@
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
+  .thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .thumbs .th { position: relative; width: 72px; height: 72px; }
+  .thumbs img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
+  .thumbs b { position: absolute; left: 4px; top: 2px; color: #fff; text-shadow: 0 0 3px #000; font-size: 13px; }
+  .thumbs i { position: absolute; right: 2px; top: 0; color: #fff; background: rgba(0,0,0,.55); border-radius: 50%; width: 20px; height: 20px; text-align: center; font-style: normal; font-size: 13px; line-height: 20px; cursor: pointer; }
+  .mine select, .mine textarea, .mine input { width: 100%; box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
     font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; }
   header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
@@ -103,13 +109,15 @@
 <script>
 const STATUS = {
   draft: '검수 대기', publish_requested: '예약 중', scheduled: '예약됨', publishing: '발행 중',
-  published: '발행 완료', failed: '발행 실패', rejected: '보류'
+  published: '발행 완료', failed: '발행 실패', rejected: '보류',
+  uploading: '사진 올리는 중', request: '글 쓰기 대기', writing: '글 쓰는 중', write_failed: '글 쓰기 실패'
 };
 const TABS = [
   ['draft', '검수 대기', ['draft', 'failed']],
   ['queue', '발행 예약', ['publish_requested', 'scheduled', 'publishing']],
   ['done', '발행 완료', ['published']],
   ['rejected', '보류', ['rejected']],
+  ['mine', '✍️ 내 글 쓰기', ['uploading', 'request', 'writing', 'write_failed']],
 ];
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -337,6 +345,7 @@ function showList() {
   drawTabs();
   if (tab === 'threads') return showThreads();
   if (tab === 'viral') return showViral();
+  if (tab === 'mine') return showMine();
   const sts = TABS.find(t => t[0] === tab)[2];
   const list = posts.filter(p => sts.includes(p.status));
   $('main').innerHTML = list.length ? list.map(p => `
@@ -532,6 +541,65 @@ async function act(body, msg, reopen) {
   current = null;
   await refresh();
   if (reopen) openPost(body.id);
+}
+
+// ✍️ 내 글 쓰기: 사진 + 짧은 메모 → 봇이 글을 완성해서 임시저장 (5~10분)
+let mineFiles = [];
+function showMine() {
+  const mine = posts.filter(p => ['uploading', 'request', 'writing', 'write_failed'].includes(p.status));
+  const lastCat = load('mine_cat') || '';
+  $('main').innerHTML = `
+    <div class="card mine">
+      <div class="t">✍️ 사진이랑 메모만 올리면 글로 완성해서 임시저장해요</div>
+      <p class="help">게으른 일상 리뷰에 저장돼요. 다 되면 '검수 대기'에 올라와요 (5~10분).</p>
+      <label>글 종류
+        <select id="mKind"><option>후기</option><option>협찬</option><option>일상</option><option>정보</option></select></label>
+      <p></p><label>카테고리 (블로그에 있는 이름 그대로)<input id="mCat" value="${esc(lastCat)}" placeholder="예: 내돈내산 후기"></label>
+      <p></p><label>메모 (생각나는 대로 짧게)
+        <textarea id="mMemo" rows="7" placeholder="예) GS25 남쏨타이 오렌지주스. 2000원 330ml. 차 오래 타서 미식거릴 때 마셨는데 안 쓰고 달달상콤해서 속이 편했음. 과육 알갱이 있음. 175kcal라 단 건 주의"></textarea></label>
+      <p></p><div class="row"><button id="mPick">📷 사진 고르기</button><span id="mCount" class="help">사진 0장</span></div>
+      <div id="mThumbs" class="thumbs"></div>
+      <p class="help">첫 번째 사진이 대표 사진이 돼요. 고른 순서대로 들어가요.</p>
+      <button class="primary" id="mGo">글 써주세요 ✍️</button>
+    </div>
+    ${mine.length ? '<h3>요청한 글</h3>' + mine.map(p => `
+      <div class="card"><div class="t">${esc(p.title)}</div>
+        <div class="meta"><span class="badge ${esc(p.status)}">${STATUS[p.status] || esc(p.status)}</span> ${fmt(p.created)}</div>
+        ${p.note ? `<div class="help">${esc(p.note)}</div>` : ''}
+        ${p.status === 'write_failed' ? `<div class="row"><button data-retry="${esc(p.id)}">다시 시도</button></div>` : ''}
+      </div>`).join('') : ''}`;
+  const drawThumbs = () => {
+    $('mCount').textContent = `사진 ${mineFiles.length}장`;
+    $('mThumbs').innerHTML = mineFiles.map((f, i) => `<span class="th"><img src="${URL.createObjectURL(f)}"><b>${i + 1}</b><i data-del="${i}">✕</i></span>`).join('');
+    $('mThumbs').querySelectorAll('[data-del]').forEach(x => x.onclick = () => { mineFiles.splice(+x.dataset.del, 1); drawThumbs(); });
+  };
+  drawThumbs();
+  $('mPick').onclick = () => pickFiles(true, fs => { mineFiles = mineFiles.concat(fs.filter(f => f.type.startsWith('image/'))).slice(0, 20); drawThumbs(); });
+  $('main').querySelectorAll('[data-retry]').forEach(b => b.onclick = async () => {
+    try { await post({ action: 'update', id: b.dataset.retry, fields: { status: 'request', note: '' } }); toast('다시 요청했어요'); refresh(); }
+    catch (e) { toast('실패: ' + e.message); }
+  });
+  $('mGo').onclick = async function () {
+    const memo = $('mMemo').value.trim(), cat = $('mCat').value.trim(), kind = $('mKind').value;
+    if (!memo) return toast('메모를 적어 주세요');
+    if (!mineFiles.length) return toast('사진을 1장 이상 골라 주세요');
+    if (this.dataset.busy) return; this.dataset.busy = 1; this.disabled = true;
+    store('mine_cat', cat);
+    const d = new Date(), z = n => String(n).padStart(2, '0');
+    const id = `m${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+    try {
+      await post({ action: 'add', id, post: { id, slot: '내글', category: cat, title: '✍️ ' + memo.slice(0, 30),
+        body: memo, img_prompt: memo, note: '종류:' + kind, status: 'uploading' } });
+      for (let i = 0; i < mineFiles.length; i++) {
+        toast(`사진 올리는 중 ${i + 1}/${mineFiles.length} · 화면을 켜두세요`, true);
+        const x = await prepare(mineFiles[i]);
+        await post({ action: 'img', id, name: `photo${z(i + 1)}.jpg`, mime: x.mime, data: x.data });
+      }
+      await post({ action: 'update', id, fields: { status: 'request', note: '종류:' + kind } });
+      mineFiles = []; toast('요청 완료! 5~10분 뒤 검수 대기에 올라와요');
+      refresh();
+    } catch (e) { toast('실패: ' + e.message); this.disabled = false; delete this.dataset.busy; }
+  };
 }
 
 function markGo() {
