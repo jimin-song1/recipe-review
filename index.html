@@ -550,7 +550,7 @@ async function act(body, msg, reopen) {
 let mineFiles = [];
 let mineDraft = { memo: '', kind: '후기', cat: '' };   // 자동 새로고침돼도 적던 내용 유지
 // 게으른 일상 리뷰 카테고리 (블로그에서 불러온 목록)
-const MY_CATS = [{"label": "게으른 일상", "value": "게으른 일상"}, {"label": "육아해본 리뷰", "value": "육아해본 리뷰"}, {"label": "구찌,만찌 > 구찌,만찌", "value": "구찌,만찌"}, {"label": "구찌,만찌 > 강아지 관련 정보", "value": "강아지 관련 정보"}, {"label": "프로망상러 > 예약은 안 했고요", "value": "예약은 안 했고요"}, {"label": "프로망상러 > 위장은 이미 출발", "value": "위장은 이미 출발"}, {"label": "프로망상러 > 결제 직전까지 가봄", "value": "결제 직전까지 가봄"}, {"label": "프로망상러 > 이게 진짜 되네?", "value": "이게 진짜 되네?"}, {"label": "레시피 > 요리", "value": "요리"}, {"label": "레시피 > 디저트", "value": "디저트"}, {"label": "써본 리뷰", "value": "써본 리뷰"}, {"label": "먹어본 리뷰", "value": "먹어본 리뷰"}, {"label": "해먹은 리뷰", "value": "해먹은 리뷰"}, {"label": "놀아본 리뷰", "value": "놀아본 리뷰"}];
+const MY_CATS = [{"label": "게으른 일상", "value": "게으른 일상"}, {"label": "육아해본 리뷰", "value": "육아해본 리뷰"}, {"label": "구찌,만찌 > 구찌,만찌", "value": "구찌,만찌"}, {"label": "구찌,만찌 > 강아지 관련 정보", "value": "강아지 관련 정보"}, {"label": "프로망상러 > 예약은 안 했고요", "value": "예약은 안 했고요"}, {"label": "프로망상러 > 결제 직전까지 가봄", "value": "결제 직전까지 가봄"}, {"label": "프로망상러 > 이게 진짜 되네?", "value": "이게 진짜 되네?"}, {"label": "레시피 > 요리", "value": "요리"}, {"label": "레시피 > 디저트", "value": "디저트"}, {"label": "써본 리뷰", "value": "써본 리뷰"}, {"label": "먹어본 리뷰", "value": "먹어본 리뷰"}, {"label": "해먹은 리뷰", "value": "해먹은 리뷰"}, {"label": "놀아본 리뷰", "value": "놀아본 리뷰"}];
 function showMine() {
   const mine = posts.filter(p => ['uploading', 'request', 'writing', 'write_failed'].includes(p.status));
   const lastCat = load('mine_cat') || '';
